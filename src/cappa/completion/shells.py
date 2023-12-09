@@ -37,8 +37,7 @@ _%(safe_prog_name)s_completion() {
     local -a completions
     (( ! $+commands[%(prog_name)s] )) && return 1
 
-    completions=("${(@f)$(env COMPLETION_LINE="${words[*]}" COMPLETION_LOCATION=$((CURRENT)) \
-%(prog_name)s %(completion_arg)s=complete)}")
+    completions=("${(@f)$(env COMPLETION_LINE="${words[*]}" COMPLETION_LOCATION=$((CURRENT)) %(prog_name)s %(completion_arg)s=complete)}")
 
     if [[ -n "$completions" ]]; then
         if [[ "${completions[1]}" == "file" ]]; then
@@ -60,8 +59,7 @@ fi
         "fish",
         template="""\
 function _%(safe_prog_name)s_completion
-    set -l response (env COMPLETION_LINE=(commandline -cp) COMPLETION_LOCATION=(math (commandline -C) + 1) \
-%(prog_name)s %(completion_arg)s=complete)
+    set -l response (env COMPLETION_LINE=(commandline -cp) COMPLETION_LOCATION=(math (commandline -C) + 1) %(prog_name)s %(completion_arg)s=complete)
 
     for completion in $response
         set -l value (string split --max 1 ":" -- $completion)
