@@ -111,8 +111,12 @@ class BooleanOptionalAction(argparse.Action):
 
 def custom_action(arg: Arg, action: Callable):
     class CustomAction(argparse.Action):
-        def __call__(
-            self, parser: ArgumentParser, namespace, values, option_string=None  # type: ignore
+        def __call__(  # type: ignore
+            self,
+            parser: ArgumentParser,
+            namespace,
+            values,
+            option_string=None,
         ):
             # XXX: This should ideally be able to inject parser state, but here, we dont
             #      have access to the same state as the native parser.
@@ -136,7 +140,7 @@ class Nestedspace(argparse.Namespace):
     """Write each . separated section as a nested `Nestedspace` instance.
 
     By default, argparse write everything to a flat namespace so there's no
-    obvious way to distinguish between mulitple unrelated subcommands once
+    obvious way to distinguish between multiple unrelated subcommands once
     once has been chosen.
     """
 
@@ -154,8 +158,9 @@ def backend(
     command: Command[T],
     argv: list[str],
     output: Output,
+    prog: str,
 ) -> tuple[typing.Any, Command[T], dict[str, typing.Any]]:
-    parser = create_parser(command, output=output)
+    parser = create_parser(command, output=output, prog=prog)
 
     try:
         version = next(
@@ -172,7 +177,7 @@ def backend(
     try:
         result_namespace = parser.parse_args(argv, ns)
     except argparse.ArgumentError as e:
-        raise Exit(str(e), code=2, prog=command.real_name())
+        raise Exit(str(e), code=2, prog=prog)
 
     result = to_dict(result_namespace)
     command = result.pop("__command__")
@@ -180,7 +185,9 @@ def backend(
     return parser, command, result
 
 
-def create_parser(command: Command, output: Output) -> argparse.ArgumentParser:
+def create_parser(
+    command: Command, output: Output, prog: str
+) -> argparse.ArgumentParser:
     kwargs: dict[str, typing.Any] = {}
     if sys.version_info >= (3, 9):  # pragma: no cover
         kwargs["exit_on_error"] = False
@@ -188,7 +195,7 @@ def create_parser(command: Command, output: Output) -> argparse.ArgumentParser:
     parser = ArgumentParser(
         command=command,
         output=output,
-        prog=command.real_name(),
+        prog=prog,
         description=join_help(command.help, command.description),
         allow_abbrev=False,
         add_help=False,
@@ -204,15 +211,17 @@ def add_arguments(
     parser: argparse.ArgumentParser, command: Command, output: Output, dest_prefix=""
 ):
     arg_groups = generate_arg_groups(command, include_hidden=True)
-    for group_name, args in arg_groups:
-        group = parser.add_argument_group(title=group_name)
+    for group, args in arg_groups:
+        argparse_group = parser.add_argument_group(title=group.name)
+        if group.exclusive:
+            argparse_group = argparse_group.add_mutually_exclusive_group()
 
         for arg in args:
             if isinstance(arg, Arg):
-                add_argument(group, arg, dest_prefix=dest_prefix)
+                add_argument(argparse_group, arg, dest_prefix=dest_prefix)
             elif isinstance(arg, Subcommand):
                 add_subcommands(
-                    parser, group_name, arg, output=output, dest_prefix=dest_prefix
+                    parser, group.name, arg, output=output, dest_prefix=dest_prefix
                 )
             else:
                 assert_never(arg)
@@ -248,10 +257,7 @@ def add_argument(
         kwargs["required"] = arg.required
 
     if arg.default is not missing:
-        if arg.action and arg.action is ArgAction.append:
-            kwargs["default"] = list(arg.default)  # type: ignore
-        else:
-            kwargs["default"] = arg.default
+        kwargs["default"] = argparse.SUPPRESS
 
     if num_args is not None and (arg.action and arg.action not in no_extra_arg_actions):
         kwargs["nargs"] = num_args
@@ -261,6 +267,8 @@ def add_argument(
     if arg.choices:
         kwargs["choices"] = arg.choices
 
+    deprecated_kwarg = add_deprecated_kwarg(arg)
+    kwargs.update(deprecated_kwarg)
     kwargs.update(extra_kwargs)
 
     parser.add_argument(*names, **kwargs)
@@ -281,6 +289,8 @@ def add_subcommands(
     )
 
     for name, subcommand in subcommands.options.items():
+        deprecated_kwarg = add_deprecated_kwarg(subcommand)
+
         nested_dest_prefix = f"{dest_prefix}{subcommand_dest}."
         subparser = subparsers.add_parser(
             name=subcommand.real_name(),
@@ -291,6 +301,7 @@ def add_subcommands(
             command=subcommand,  # type: ignore
             output=output,
             prog=f"{parser.prog} {subcommand.real_name()}",
+            **deprecated_kwarg,
         )
         subparser.set_defaults(
             __command__=subcommand, **{nested_dest_prefix + "__name__": name}
@@ -340,3 +351,10 @@ def get_action(arg: Arg) -> argparse.Action | type[argparse.Action] | str:
 
     action = typing.cast(Callable, action)
     return custom_action(arg, action)
+
+
+def add_deprecated_kwarg(arg: Arg | Command) -> dict[str, typing.Any]:
+    if sys.version_info < (3, 13) or not arg.deprecated:
+        return {}
+
+    return {"deprecated": arg.deprecated}  # pragma: no cover

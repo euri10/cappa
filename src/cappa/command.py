@@ -7,14 +7,12 @@ import typing
 from collections.abc import Callable
 from types import ModuleType
 
-from typing_extensions import get_type_hints
-
 from cappa import class_inspect
-from cappa.arg import Arg, ArgAction
+from cappa.arg import Arg, ArgAction, Group
 from cappa.env import Env
 from cappa.output import Exit, Output, prompt_types
 from cappa.subcommand import Subcommand
-from cappa.typing import missing
+from cappa.typing import get_type_hints, missing
 
 try:
     import docstring_parser as _docstring_parser
@@ -33,6 +31,10 @@ class CommandArgs(typing.TypedDict, total=False):
     help: str | None
     description: str | None
     invoke: Callable | str | None
+
+    hidden: bool
+    default_short: bool
+    default_long: bool
 
 
 @dataclasses.dataclass
@@ -55,19 +57,33 @@ class Command(typing.Generic[T]):
             a string. When the value is a string it will be interpreted as
             `module.submodule.function`; the module will be dynamically imported,
             and the referenced function invoked.
+        hidden: If `True`, the command will not be included in the help output.
+            This option is only relevant to subcommands.
+        default_short: If `True`, all arguments will be treated as though annotated
+            with `Annotated[T, Arg(short=True)]`, unless otherwise annotated.
+        default_true: If `True`, all arguments will be treated as though annotated
+            with `Annotated[T, Arg(long=True)]`, unless otherwise annotated.
+        deprecated: If supplied, the argument will be marked as deprecated. If given `True`,
+            a default message will be generated, otherwise a supplied string will be
+            used as the deprecation message.
     """
 
-    cmd_cls: typing.Type[T]
+    cmd_cls: type[T]
     arguments: list[Arg | Subcommand] = dataclasses.field(default_factory=list)
     name: str | None = None
     help: str | None = None
     description: str | None = None
     invoke: Callable | str | None = None
 
+    hidden: bool = False
+    default_short: bool = False
+    default_long: bool = False
+    deprecated: bool | str = False
+
     _collected: bool = False
 
     @classmethod
-    def get(cls, obj: typing.Type[T] | Command[T]) -> Command[T]:
+    def get(cls, obj: type[T] | Command[T]) -> Command[T]:
         if isinstance(obj, cls):
             return obj
 
@@ -113,7 +129,13 @@ class Command(typing.Generic[T]):
 
         if command.arguments:
             arguments: list[Arg | Subcommand] = [
-                a.normalize() for a in command.arguments
+                a.normalize(
+                    default_short=command.default_short,
+                    default_long=command.default_long,
+                )
+                if isinstance(a, Arg)
+                else a.normalize()
+                for a in command.arguments
             ]
         else:
             fields = class_inspect.fields(command.cmd_cls)
@@ -129,9 +151,17 @@ class Command(typing.Generic[T]):
                 if maybe_subcommand:
                     arguments.append(maybe_subcommand)
                 else:
-                    arg_def: Arg = Arg.collect(field, type_hint, fallback_help=arg_help)
-                    arguments.append(arg_def)
+                    arg_defs: list[Arg] = Arg.collect(
+                        field,
+                        type_hint,
+                        fallback_help=arg_help,
+                        default_short=command.default_short,
+                        default_long=command.default_long,
+                    )
 
+                    arguments.extend(arg_defs)
+
+        check_group_identity(arguments)
         kwargs["arguments"] = arguments
 
         return dataclasses.replace(command, **kwargs)
@@ -148,12 +178,23 @@ class Command(typing.Generic[T]):
         if argv is None:  # pragma: no cover
             argv = sys.argv[1:]
 
+        prog = command.real_name()
         try:
-            parser, parsed_command, parsed_args = backend(command, argv, output=output)
+            parser, parsed_command, parsed_args = backend(
+                command, argv, output=output, prog=prog
+            )
             prog = parser.prog
             result = command.map_result(command, prog, parsed_args)
         except Exit as e:
-            output.exit(e)
+            from cappa.help import format_help, format_short_help
+
+            command = e.command or command
+            prog = e.prog or prog
+            output.exit(
+                e,
+                help=format_help(command, prog),
+                short_help=format_short_help(command, prog),
+            )
             raise
 
         return command, parsed_command, result
@@ -260,3 +301,23 @@ def get_doc(cls):
     if doc == dataclasses_docstring:
         return ""
     return doc
+
+
+def check_group_identity(args: list[Arg | Subcommand]):
+    group_identity: dict[str, Group] = {}
+
+    for arg in args:
+        if isinstance(arg, Subcommand):
+            continue
+
+        assert isinstance(arg.group, Group)
+
+        name = typing.cast(str, arg.group.name)
+        identity = group_identity.get(name)
+        if identity and identity != arg.group:
+            raise ValueError(
+                f"Group details between `{identity}` and `{arg.group}` must match"
+            )
+
+        assert isinstance(arg.group, Group)
+        group_identity[name] = arg.group

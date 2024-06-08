@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import List, Union
+from typing import Union
 
 import cappa
 import pytest
@@ -12,7 +14,7 @@ from tests.utils import backends, parse
 def test_sequence_unioned_with_scalar(backend):
     @dataclass
     class Args:
-        foo: Union[List[str], str]
+        foo: Union[list[str], str]
 
     with pytest.raises(ValueError) as e:
         parse(Args, "--help", backend=backend)
@@ -29,14 +31,15 @@ def test_sequence_unioned_with_scalar(backend):
 def test_sequence_with_scalar_action(backend):
     @dataclass
     class Args:
-        foo: Annotated[List[str], cappa.Arg(action=cappa.ArgAction.set)]
+        foo: Annotated[list[str], cappa.Arg(action=cappa.ArgAction.set, num_args=1)]
 
     with pytest.raises(ValueError) as e:
         parse(Args, "--help", backend=backend)
 
-    assert str(e.value) == (
+    result = str(e.value).replace("typing.List", "list")
+    assert result == (
         "On field 'foo', apparent mismatch of annotated type with `Arg` options. "
-        "'typing.List[str]' type produces a sequence, whereas `num_args=1`/`action=ArgAction.set` do not. "
+        "'list[str]' type produces a sequence, whereas `num_args=1`/`action=ArgAction.set` do not. "
         "See [documentation](https://cappa.readthedocs.io/en/latest/annotation.html) for more details."
     )
 
@@ -45,14 +48,24 @@ def test_sequence_with_scalar_action(backend):
 def test_sequence_with_scalar_num_args(backend):
     @dataclass
     class Args:
-        foo: Annotated[List[str], cappa.Arg(num_args=1, short=True)]
+        foo: Annotated[list[str], cappa.Arg(num_args=1, short=True)]
+
+    args = parse(Args, "-f", "a", "-f", "b", backend=backend)
+    assert args == Args(["a", "b"])
+
+    @dataclass
+    class ArgsBad:
+        foo: Annotated[
+            list[str], cappa.Arg(num_args=1, short=True, action=cappa.ArgAction.set)
+        ]
 
     with pytest.raises(ValueError) as e:
-        parse(Args, "--help", backend=backend)
+        parse(ArgsBad, "--help", backend=backend)
 
-    assert str(e.value) == (
+    result = str(e.value).replace("typing.List", "list")
+    assert result == (
         "On field 'foo', apparent mismatch of annotated type with `Arg` options. "
-        "'typing.List[str]' type produces a sequence, whereas `num_args=1`/`action=None` do not. "
+        "'list[str]' type produces a sequence, whereas `num_args=1`/`action=ArgAction.set` do not. "
         "See [documentation](https://cappa.readthedocs.io/en/latest/annotation.html) for more details."
     )
 

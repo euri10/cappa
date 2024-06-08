@@ -8,6 +8,7 @@
 - [Comparison vs existing libraries.](https://cappa.readthedocs.io/en/latest/comparison.html).
 - [Annotation inference details](https://cappa.readthedocs.io/en/latest/annotation.html)
 - ["invoke" (click-like) details](https://cappa.readthedocs.io/en/latest/invoke.html)
+- [Class compatibility (dataclasses/pydantic/etc)](https://cappa.readthedocs.io/en/latest/class_compatibility.html)
 
 Cappa is a declarative command line parsing library, taking much of its
 inspiration from the "Derive" API from the
@@ -148,7 +149,7 @@ def print_cmd(print: Print):
     else:
         print("printing!")
 
-@cappa.invoke(invoke=print_cmd)
+@cappa.command(invoke=print_cmd)
 class Print:
     loudly: bool
 

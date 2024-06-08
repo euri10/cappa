@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Union
+from typing import Union
 
 import cappa
 import pytest
@@ -15,7 +15,7 @@ def test_(backend):
     @dataclass
     class Args:
         foo: Annotated[str, cappa.Arg(long=True)]
-        raw: Annotated[Union[List[str], None], cappa.Arg(num_args=-1)] = None
+        raw: Annotated[Union[list[str], None], cappa.Arg(num_args=-1)] = None
 
     with pytest.raises(cappa.Exit) as e:
         parse(Args, "--foo", "--", "value", backend=backend)

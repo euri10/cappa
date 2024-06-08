@@ -10,13 +10,13 @@ from rich.table import Table
 from rich.text import Text
 from typing_extensions import TypeAlias
 
-from cappa.arg import Arg, ArgAction, no_extra_arg_actions
+from cappa.arg import Arg, ArgAction, Group, no_extra_arg_actions
 from cappa.command import Command
 from cappa.output import Displayable
 from cappa.subcommand import Subcommand
 from cappa.typing import missing
 
-ArgGroup: TypeAlias = typing.Tuple[str, typing.List[typing.Union[Arg, Subcommand]]]
+ArgGroup: TypeAlias = typing.Tuple[Group, typing.List[typing.Union[Arg, Subcommand]]]
 
 left_padding = (0, 0, 0, 2)
 
@@ -98,16 +98,19 @@ def format_help(command: Command, prog: str) -> list[Displayable]:
     return lines
 
 
+def format_short_help(command: Command, prog: str) -> Displayable:
+    arg_groups = generate_arg_groups(command)
+    return add_short_args(prog, arg_groups)
+
+
 def generate_arg_groups(command: Command, include_hidden=False) -> list[ArgGroup]:
-    def by_group(arg: Arg | Subcommand) -> tuple[int, str]:
-        assert isinstance(arg.group, tuple)
-        return typing.cast(typing.Tuple[int, str], arg.group)
+    def by_group(arg: Arg | Subcommand) -> Group:
+        assert isinstance(arg.group, Group)
+        return arg.group
 
     return [
         (g, [a for a in args if include_hidden or not a.hidden])
-        for (_, g), args in groupby(
-            sorted(command.arguments, key=by_group), key=by_group
-        )
+        for g, args in groupby(sorted(command.arguments, key=by_group), key=by_group)
     ]
 
 
@@ -127,16 +130,17 @@ def add_long_args(arg_groups: list[ArgGroup]) -> list:
 
     for group, args in arg_groups:
         table.add_row(
-            Text(group, style="cappa.group", justify="left"),
+            Text(group.name, style="cappa.group", justify="left"),
             Text(style="cappa.group"),
         )
         for arg in args:
             if isinstance(arg, Arg):
                 table.add_row(
-                    Padding(format_arg_name(arg, ", "), left_padding), arg.help
+                    Padding(format_arg_name(arg, ", "), left_padding),
+                    Text(arg.help or "", style=""),
                 )
             else:
-                for option in arg.options.values():
+                for option in arg.available_options():
                     table.add_row(*format_subcommand(option))
 
         table.add_row()
@@ -175,3 +179,7 @@ def format_subcommand(command: Command):
         ),
         command.help,
     )
+
+
+def format_subcommand_names(names: list[str]):
+    return ", ".join(f"[cappa.subcommand]{a}[/cappa.subcommand]" for a in names)

@@ -15,6 +15,20 @@ from rich.text import Text
 from rich.theme import Theme
 from typing_extensions import TypeAlias
 
+if typing.TYPE_CHECKING:
+    from cappa.command import Command
+
+__all__ = [
+    "output_format",
+    "error_format",
+    "error_format_without_short_help",
+    "Displayable",
+    "theme",
+    "Output",
+    "Exit",
+    "HelpExit",
+]
+
 prompt_types = (Prompt, Confirm)
 
 
@@ -28,9 +42,14 @@ theme: Theme = Theme(
         "cappa.arg": "cyan",
         "cappa.arg.name": "dark_cyan",
         "cappa.subcommand": "dark_cyan",
-        "cappa.help": "default",
+        "cappa.help": "",
     }
 )
+
+
+output_format: str = "{message}"
+error_format: str = "{short_help}\n\n[red]Error[/red]: {message}"
+error_format_without_short_help: str = "[red]Error[/red]: {message}"
 
 
 @dataclass
@@ -54,7 +73,7 @@ class Output:
             in `output_format`: prog, code, message.
         error_format: Format string through which output_console error will be
             formatted. The following format string named format arguments can be used
-            in `output_format`: prog, code, message.
+            in `error_format`: prog, code, message, help, short_help.
 
     Examples:
         >>> output = Output()
@@ -68,8 +87,8 @@ class Output:
         default_factory=lambda: Console(file=sys.stderr, theme=theme)
     )
 
-    output_format: str = "{message}"
-    error_format: str = "[red]Error[/red]: {message}"
+    output_format: str = output_format
+    error_format: str = error_format
 
     def color(self, value: bool = True):
         """Override the default `color` setting (None), to an explicit True/False value."""
@@ -82,12 +101,17 @@ class Output:
         self.output_console.push_theme(t or theme)
         self.error_console.push_theme(t or theme)
 
-    def exit(self, e: Exit):
+    def exit(
+        self,
+        e: Exit,
+        help: list[Displayable] | None = None,
+        short_help: Displayable | None = None,
+    ):
         """Print a `cappa.Exit` object to the appropriate console."""
         if e.code == 0:
-            self.output(e)
+            self.output(e, help=help, short_help=short_help)
         else:
-            self.error(e)
+            self.error(e, help=help, short_help=short_help)
 
     def output(
         self, message: list[Displayable] | Displayable | Exit | str | None, **context
@@ -118,7 +142,7 @@ class Output:
         console: Console,
         message: list[Displayable] | Displayable | Exit | str | None,
         format: str,
-        **context,
+        **context: Displayable | list[Displayable] | None,
     ) -> Text | str | None:
         code: int | str | None = None
         prog = None
@@ -137,9 +161,14 @@ class Output:
             "prog": prog,
             "message": text,
         }
-        final_context = {**inner_context, **context}
 
-        return Text.from_markup(format.format(**final_context))
+        context = {"short_help": None, "help": None, **context}
+        rendered_context = {
+            k: rich_to_ansi(console, v) if v else "" for k, v in context.items()
+        }
+        final_context = {**inner_context, **rendered_context}
+
+        return Text.from_markup(format.format(**final_context).strip())
 
     def write(self, console: Console, message: Text | str | None):
         if message is None:
@@ -166,11 +195,13 @@ class Exit(SystemExit):
         self,
         message: list[Displayable] | Displayable | None = None,
         *,
+        command: Command | None = None,
         code: str | int | None = 0,
         prog: str | None = None,
     ):
         self.message = message
         self.prog = prog
+        self.command = command
         super().__init__(code)
 
 

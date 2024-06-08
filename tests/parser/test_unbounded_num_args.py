@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Optional
 
 import cappa
 from typing_extensions import Annotated
@@ -11,7 +13,7 @@ from tests.utils import backends, parse
 def test_num_args_unbounded_length_num_args(backend):
     @dataclass
     class Args:
-        a: Annotated[List[str], cappa.Arg(short=True, num_args=-1)] = field(
+        a: Annotated[list[str], cappa.Arg(short=True, num_args=-1)] = field(
             default_factory=list
         )
         b: Annotated[str, cappa.Arg(short=True)] = field(default="")

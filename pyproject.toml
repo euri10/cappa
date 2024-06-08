@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cappa"
-version = "0.14.1"
+version = "0.20.0"
 description = "Declarative CLI argument parser."
 
 repository = "https://github.com/dancardin/cappa"
@@ -27,9 +27,10 @@ include = [
 [tool.poetry.dependencies]
 python = ">=3.8,<4"
 
-typing-extensions = ">=4.7.1"
+typing-extensions = ">=4.8.0"
 typing-inspect = ">=0.9.0"
 rich = "*"
+eval_type_backport = {version = "*", python = "<3.10"}
 
 docstring-parser = {version = ">=0.15", optional = true}
 
@@ -38,13 +39,15 @@ docstring = ["docstring-parser"]
 
 [tool.poetry.group.dev.dependencies]
 attrs = "*"
-black = "^23.7.0"
 coverage = "^7.3.0"
+msgspec = "*"
 mypy = ">=1.0"
 pydantic = "*"
 pytest = "^7.4.0"
-ruff = "^0.0.286"
+ruff = "^0.2.2"
+docutils = "0.20.0"
 typing-extensions = ">=4.8.0"
+types-docutils = "^0.20.0.3"
 
 [build-system]
 requires = ["poetry-core"]
@@ -53,6 +56,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.ruff]
 target-version = "py38"
 
+[tool.ruff.lint]
 select = ["C", "D", "E", "F", "I", "N", "Q", "RET", "RUF", "S", "T", "UP", "YTT"]
 ignore = [
     "C901",
@@ -68,11 +72,11 @@ ignore = [
     "D413",
 ]
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "tests/*" = ["T201"]
 "src/cappa/parser.py" = ["N818"]
 
-[tool.ruff.pyupgrade]
+[tool.ruff.lint.pyupgrade]
 keep-runtime-typing = true
 
 [tool.coverage.report]
@@ -97,7 +101,6 @@ ignore_missing_imports = true
 warn_unused_ignores = true
 incremental = true
 check_untyped_defs = true
-enable_incomplete_feature = ["Unpack"]
 
 [tool.pytest.ini_options]
 doctest_optionflags = "NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL ELLIPSIS"

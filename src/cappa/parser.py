@@ -4,10 +4,10 @@ import dataclasses
 import typing
 from collections import deque
 
-from cappa.arg import Arg, ArgAction, no_extra_arg_actions
+from cappa.arg import Arg, ArgAction, Group, no_extra_arg_actions
 from cappa.command import Command, Subcommand
 from cappa.completion.types import Completion, FileCompletion
-from cappa.help import format_help
+from cappa.help import format_help, format_subcommand_names
 from cappa.invoke import fullfill_deps
 from cappa.output import Exit, HelpExit, Output
 from cappa.typing import T, assert_type
@@ -68,10 +68,9 @@ def backend(
     command: Command[T],
     argv: list[str],
     output: Output,
+    prog: str,
     provide_completions: bool = False,
 ) -> tuple[typing.Any, Command[T], dict[str, typing.Any]]:
-    prog = command.real_name()
-
     args = RawArg.collect(argv, provide_completions=provide_completions)
 
     context = ParseContext.from_command(args, [command], output)
@@ -91,7 +90,7 @@ def backend(
                 completions = e.arg.completion(e.value) if e.arg.completion else []
                 raise CompletionAction(*completions)
 
-            raise Exit(str(e), code=2, prog=context.prog)
+            raise Exit(str(e), code=2, prog=context.prog, command=e.command)
     except CompletionAction as e:
         from cappa.completion.base import execute, format_completions
 
@@ -117,6 +116,7 @@ class ParseContext:
     output: Output
 
     consumed_args: list[RawArg | RawOption] = dataclasses.field(default_factory=list)
+    exclusive_args: dict[str, Arg] = dataclasses.field(default_factory=dict)
 
     result: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
     command_stack: list[Command] = dataclasses.field(default_factory=list)
@@ -155,13 +155,15 @@ class ParseContext:
                     unique_names.add(arg.field_name)
                 result[arg.field_name] = arg
 
-            assert arg.short is not True
-            for short in arg.short or []:
-                result[short] = arg
+            for opts in (arg.short, arg.long):
+                if not opts:
+                    continue
 
-            assert arg.long is not True
-            for long in arg.long or []:
-                result[long] = arg
+                for key in typing.cast(typing.List[str], opts):
+                    if key in result:
+                        raise ValueError(f"Conflicting option string: {key}")
+
+                    result[key] = arg
 
         return result, unique_names
 
@@ -424,7 +426,7 @@ def consume_subcommand(context: ParseContext, arg: Subcommand) -> typing.Any:
             return
 
         raise BadArgumentError(
-            f"The following arguments are required: {{{arg.names_str()}}}",
+            f"A command is required: {{{format_subcommand_names(arg.names())}}}",
             value="",
             command=context.command,
             arg=arg,
@@ -432,11 +434,21 @@ def consume_subcommand(context: ParseContext, arg: Subcommand) -> typing.Any:
 
     assert isinstance(value, RawArg), value
     if value.raw not in arg.options:
+        message = f"Invalid command '{value.raw}'"
+        possible_values = [name for name in arg.names() if name.startswith(value.raw)]
+        if possible_values:
+            message += f" (Did you mean: {format_subcommand_names(possible_values)})"
+
         raise BadArgumentError(
-            "invalid subcommand", value=value.raw, command=context.command, arg=arg
+            message,
+            value=value.raw,
+            command=context.command,
+            arg=arg,
         )
 
     command = arg.options[value.raw]
+    check_deprecated(context, command)
+
     context.command_stack.append(command)
 
     nested_context = ParseContext.from_command(
@@ -477,16 +489,8 @@ def consume_arg(
         result = []
         while num_args:
             if isinstance(context.peek_value(), RawOption):
-                if orig_num_args < 0:
-                    break
+                break
 
-                raise BadArgumentError(
-                    f"Argument requires {orig_num_args} values, "
-                    f"only found {len(result)} ('{' '.join(result)}' so far)",
-                    value=result,
-                    command=context.command,
-                    arg=arg,
-                )
             try:
                 next_val = typing.cast(RawArg, context.next_value())
             except IndexError:
@@ -531,6 +535,36 @@ def consume_arg(
                 command=context.command,
                 arg=arg,
             )
+    else:
+        if orig_num_args > 0 and len(result) != orig_num_args:
+            quoted_result = [f"'{r}'" for r in result]
+            names_str = arg.names_str("/")
+
+            message = f"Argument '{names_str}' requires {orig_num_args} values, found {len(result)}"
+            if quoted_result:
+                message += f" ({', '.join(quoted_result)} so far)"
+            raise BadArgumentError(
+                message,
+                value=result,
+                command=context.command,
+                arg=arg,
+            )
+
+    group = typing.cast(typing.Optional[Group], arg.group)
+    if group and group.exclusive:
+        group_name = typing.cast(str, group.name)
+        exclusive_arg = context.exclusive_args.get(group_name)
+
+        if exclusive_arg and exclusive_arg != arg:
+            raise BadArgumentError(
+                f"Argument '{arg.names_str('/')}' is not allowed with argument"
+                f" '{exclusive_arg.names_str('/')}'",
+                value=result,
+                command=context.command,
+                arg=arg,
+            )
+
+        context.exclusive_args[group_name] = arg
 
     if option and arg.field_name in context.missing_options:
         context.missing_options.remove(arg.field_name)
@@ -555,6 +589,32 @@ def consume_arg(
 
     kwargs = fullfill_deps(action_handler, fullfilled_deps)
     context.result[arg.field_name] = action_handler(**kwargs)
+
+    check_deprecated(context, arg, option)
+
+
+def check_deprecated(
+    context: ParseContext, arg: Arg | Command, option: RawOption | None = None
+) -> None:
+    if not arg.deprecated:
+        return
+
+    if option:
+        kind = "Option"
+        name = option.name
+    else:
+        if isinstance(arg, Command):
+            kind = "Command"
+            name = arg.real_name()
+        else:
+            kind = "Argument"
+            name = arg.names_str("/")
+
+    message = f"{kind} `{name}` is deprecated"
+    if isinstance(arg.deprecated, str):
+        message += f": {arg.deprecated}"
+
+    context.output.error(message)
 
 
 @dataclasses.dataclass

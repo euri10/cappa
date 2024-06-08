@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 import inspect
 import typing
 from enum import Enum
 
-from typing_extensions import Self
+import typing_inspect
+from typing_extensions import Self, get_args
 
-from cappa.typing import MISSING, get_type_hints, missing
+from cappa.typing import MISSING, T, find_type_annotation, get_type_hints, missing
 
 if typing.TYPE_CHECKING:
-    from cappa import Arg, Subcommand
+    pass
 
 __all__ = [
     "fields",
@@ -19,41 +21,7 @@ __all__ = [
 
 
 def detect(cls: type) -> bool:
-    try:
-        return bool(ClassTypes.from_cls(cls))
-    except ValueError:
-        return False
-
-
-class ClassTypes(Enum):
-    dataclass = "dataclass"
-    pydantic = "pydantic"
-    pydantic_dataclass = "pydantic_dataclass"
-    attrs = "attrs"
-
-    @classmethod
-    def from_cls(cls, obj: type) -> ClassTypes:
-        if hasattr(obj, "__pydantic_fields__"):
-            return cls.pydantic_dataclass
-
-        if dataclasses.is_dataclass(obj):
-            return cls.dataclass
-
-        try:
-            from pydantic import BaseModel
-        except ImportError:  # pragma: no cover
-            pass
-        else:
-            if issubclass(obj, BaseModel):
-                return cls.pydantic
-
-        if hasattr(obj, "__attrs_attrs__"):
-            return cls.attrs
-
-        raise ValueError(  # pragma: no cover
-            f"'{cls}' is not a currently supported base class. "
-            "Must be one of: dataclass, pydantic, or attrs class."
-        )
+    return bool(ClassTypes.from_cls(cls))
 
 
 @dataclasses.dataclass
@@ -64,8 +32,11 @@ class Field:
     default_factory: typing.Any | MISSING = missing
     metadata: dict = dataclasses.field(default_factory=dict)
 
+
+@dataclasses.dataclass
+class DataclassField(Field):
     @classmethod
-    def from_dataclass(cls, typ: type) -> list[Self]:
+    def collect(cls, typ: type) -> list[Self]:
         fields = []
         for f in typ.__dataclass_fields__.values():  # type: ignore
             field = cls(
@@ -80,36 +51,11 @@ class Field:
             fields.append(field)
         return fields
 
-    @classmethod
-    def from_pydantic(cls, typ: type) -> list[Self]:
-        fields = []
-        for name, f in typ.model_fields.items():  # type: ignore
-            field = cls(
-                name=name,
-                annotation=f.annotation,
-                default=f.default
-                if f.default.__repr__() != "PydanticUndefined"
-                else missing,
-                default_factory=f.default_factory or missing,
-            )
-            fields.append(field)
-        return fields
 
+@dataclasses.dataclass
+class AttrsField(Field):
     @classmethod
-    def from_pydantic_dataclass(cls, typ: type) -> list[Self]:
-        fields = []
-        for name, f in typ.__pydantic_fields__.items():  # type: ignore
-            field = cls(
-                name=name,
-                annotation=f.annotation,
-                default=f.default or missing,
-                default_factory=f.default_factory or missing,
-            )
-            fields.append(field)
-        return fields
-
-    @classmethod
-    def from_attrs(cls, typ: type) -> list[Self]:
+    def collect(cls, typ: type) -> list[Self]:
         fields = []
         for f in typ.__attrs_attrs__:  # type: ignore
             if hasattr(f.default, "factory"):
@@ -129,35 +75,145 @@ class Field:
         return fields
 
 
+@dataclasses.dataclass
+class MsgspecField(Field):
+    @classmethod
+    def collect(cls, typ: type) -> list[Self]:
+        import msgspec
+
+        fields = []
+        for f in msgspec.structs.fields(typ):
+            default = f.default if f.default is not msgspec.NODEFAULT else missing
+            default_factory = (
+                f.default_factory
+                if f.default_factory is not msgspec.NODEFAULT
+                else missing
+            )
+            field = cls(
+                name=f.name,
+                annotation=f.type,
+                default=default,
+                default_factory=default_factory,
+            )
+            fields.append(field)
+        return fields
+
+
+@dataclasses.dataclass
+class PydanticV1Field(Field):
+    @classmethod
+    def collect(cls, typ) -> list[Self]:
+        fields = []
+        type_hints = get_type_hints(typ, include_extras=True)
+        for name, f in typ.__fields__.items():
+            annotation = get_type(type_hints[name])
+
+            field = cls(
+                name=name,
+                annotation=annotation,
+                default=f.default
+                if f.default.__repr__() != "PydanticUndefined"
+                else missing,
+                default_factory=f.default_factory or missing,
+            )
+            fields.append(field)
+        return fields
+
+
+@dataclasses.dataclass
+class PydanticV2Field(Field):
+    @classmethod
+    def collect(cls, typ: type) -> list[Self]:
+        fields = []
+        for name, f in typ.model_fields.items():  # type: ignore
+            field = cls(
+                name=name,
+                annotation=f.annotation,
+                default=f.default
+                if f.default.__repr__() != "PydanticUndefined"
+                else missing,
+                default_factory=f.default_factory or missing,
+            )
+            fields.append(field)
+        return fields
+
+
+@dataclasses.dataclass
+class PydanticV2DataclassField(Field):
+    @classmethod
+    def collect(cls, typ: type) -> list[Self]:
+        fields = []
+        for name, f in typ.__pydantic_fields__.items():  # type: ignore
+            field = cls(
+                name=name,
+                annotation=f.annotation,
+                default=f.default or missing,
+                default_factory=f.default_factory or missing,
+            )
+            fields.append(field)
+        return fields
+
+
 def fields(cls: type):
     class_type = ClassTypes.from_cls(cls)
-    if class_type == ClassTypes.dataclass:
-        return Field.from_dataclass(cls)
+    if class_type is None:
+        raise ValueError(
+            f"'{cls.__qualname__}' is not a currently supported kind of class. "
+            "Must be one of: dataclass, pydantic, or attrs class."
+        )
 
-    if class_type == ClassTypes.pydantic:
-        return Field.from_pydantic(cls)
-
-    if class_type == ClassTypes.pydantic_dataclass:
-        return Field.from_pydantic_dataclass(cls)
-
-    if class_type == ClassTypes.attrs:
-        return Field.from_attrs(cls)
-
-    raise NotImplementedError()  # pragma: no cover
+    return class_type.value.collect(cls)
 
 
-def extract_dataclass_metadata(field: Field) -> Arg | Subcommand | None:
-    from cappa.arg import Arg
-    from cappa.subcommand import Subcommand
+class ClassTypes(Enum):
+    attrs = AttrsField
+    dataclass = DataclassField
+    pydantic_v1 = PydanticV1Field
+    pydantic_v2 = PydanticV2Field
+    pydantic_v2_dataclass = PydanticV2DataclassField
+    msgspec = MsgspecField
 
+    @classmethod
+    def from_cls(cls, obj: type) -> ClassTypes | None:
+        if hasattr(obj, "__pydantic_fields__"):
+            return cls.pydantic_v2_dataclass
+
+        if dataclasses.is_dataclass(obj):
+            return cls.dataclass
+
+        if hasattr(obj, "__struct_config__"):
+            assert obj.__struct_config__.__class__.__module__.startswith("msgspec")
+            return cls.msgspec
+
+        try:
+            import pydantic
+            from pydantic import BaseModel
+        except ImportError:  # pragma: no cover
+            pass
+        else:
+            try:
+                is_base_model = isinstance(obj, type) and issubclass(obj, BaseModel)
+            except TypeError:  # pragma: no cover
+                is_base_model = False
+
+            if is_base_model:
+                if pydantic.__version__.startswith("1."):
+                    return cls.pydantic_v1
+                return cls.pydantic_v2
+
+        if hasattr(obj, "__attrs_attrs__"):
+            return cls.attrs
+
+        return None
+
+
+def extract_dataclass_metadata(field: Field, cls: type[T]) -> T | None:
     field_metadata = field.metadata.get("cappa")
     if not field_metadata:
         return None
 
-    if not isinstance(field_metadata, (Arg, Subcommand)):
-        raise ValueError(
-            '`metadata={"cappa": <x>}` must be of type `Arg` or `Subcommand`'
-        )
+    if not isinstance(field_metadata, cls):
+        return None
 
     return field_metadata
 
@@ -169,29 +225,51 @@ def get_command_capable_object(obj):
     the arguments to the dataclass into the original callable.
     """
     if inspect.isfunction(obj):
+        from cappa import Dep
 
-        def call(self):
+        function_args = []
+
+        @functools.wraps(obj)
+        def call(self, **deps):
             kwargs = dataclasses.asdict(self)
-            return obj(**kwargs)
+            return obj(**kwargs, **deps)
+
+        # We need to create a fake signature for the above callable, which does
+        # not retain the `Arg` annotations
+        sig = inspect.signature(obj)
+        sig_params: dict = dict(sig.parameters)
+        sig._parameters = sig_params  # type: ignore
+        call.__signature__ = sig  # type: ignore
 
         args = get_type_hints(obj, include_extras=True)
         parameters = inspect.signature(obj).parameters
-        fields = [
-            (
-                name,
-                annotation,
-                dataclasses.field(
-                    default=parameters[name].default
-                    if parameters[name].default is not inspect.Parameter.empty
-                    else dataclasses.MISSING
-                ),
+        for name, annotation in args.items():
+            if find_type_annotation(annotation, Dep).obj:
+                continue
+
+            sig_params.pop(name, None)
+            function_args.append(
+                (
+                    name,
+                    annotation,
+                    dataclasses.field(
+                        default=parameters[name].default
+                        if parameters[name].default is not inspect.Parameter.empty
+                        else dataclasses.MISSING
+                    ),
+                )
             )
-            for name, annotation in args.items()
-        ]
+
         return dataclasses.make_dataclass(
             obj.__name__,
-            fields,
+            function_args,
             namespace={"__call__": call},
         )
 
     return obj
+
+
+def get_type(typ):
+    if typing_inspect.is_optional_type(typ):
+        return get_args(typ)[0]
+    return typ

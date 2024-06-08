@@ -14,7 +14,7 @@ from cappa.help import (
     create_help_arg,
     create_version_arg,
 )
-from cappa.invoke import resolve_callable
+from cappa.invoke import Dep, resolve_callable
 from cappa.output import Output
 
 if typing.TYPE_CHECKING:
@@ -79,7 +79,9 @@ def parse(
 def invoke(
     obj: type | Command,
     *,
-    deps: typing.Sequence[typing.Callable] | None = None,
+    deps: typing.Sequence[typing.Callable]
+    | typing.Mapping[typing.Callable, Dep | typing.Any]
+    | None = None,
     argv: list[str] | None = None,
     backend: typing.Callable | None = None,
     color: bool = True,
@@ -97,7 +99,7 @@ def invoke(
     Arguments:
         obj: A class which can represent a CLI command chain.
         deps: Optional extra depdnencies to load ahead of invoke processing. These
-            deps are evaulated in order and unconditionally.
+            deps are evaluated in order and unconditionally.
         argv: Defaults to the process argv. This command is generally only
             necessary when testing.
         backend: A function used to perform the underlying parsing and return a raw
@@ -143,7 +145,9 @@ def invoke(
 async def invoke_async(
     obj: type | Command,
     *,
-    deps: typing.Sequence[typing.Callable] | None = None,
+    deps: typing.Sequence[typing.Callable]
+    | typing.Mapping[typing.Callable, Dep | typing.Any]
+    | None = None,
     argv: list[str] | None = None,
     backend: typing.Callable | None = None,
     color: bool = True,
@@ -161,7 +165,7 @@ async def invoke_async(
     Arguments:
         obj: A class which can represent a CLI command chain.
         deps: Optional extra depdnencies to load ahead of invoke processing. These
-            deps are evaulated in order and unconditionally.
+            deps are evaluated in order and unconditionally.
         argv: Defaults to the process argv. This command is generally only
             necessary when testing.
         backend: A function used to perform the underlying parsing and return a raw
@@ -243,6 +247,10 @@ def command(
     help: str | None = None,
     description: str | None = None,
     invoke: typing.Callable | str | None = None,
+    hidden: bool = False,
+    default_short: bool = False,
+    default_long: bool = False,
+    deprecated: bool = False,
 ):
     """Register a cappa CLI command/subcomment.
 
@@ -258,6 +266,15 @@ def command(
         invoke: Optional command to be called in the event parsing is successful.
             In the case of subcommands, it will only call the parsed/selected
             function to invoke.
+        hidden: If `True`, the command will not be included in the help output.
+            This option is only relevant to subcommands.
+        default_short: If `True`, all arguments will be treated as though annotated
+            with `Annotated[T, Arg(short=True)]`, unless otherwise annotated.
+        default_long: If `True`, all arguments will be treated as though annotated
+            with `Annotated[T, Arg(long=True)]`, unless otherwise annotated.
+        deprecated: If supplied, the argument will be marked as deprecated. If given `True`,
+            a default message will be generated, otherwise a supplied string will be
+            used as the deprecation message.
     """
 
     def wrapper(_decorated_cls):
@@ -270,6 +287,10 @@ def command(
             name=name,
             help=help,
             description=description,
+            hidden=hidden,
+            default_short=default_short,
+            default_long=default_long,
+            deprecated=deprecated,
         )
         _decorated_cls.__cappa__ = instance
         return _decorated_cls

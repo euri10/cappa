@@ -122,6 +122,12 @@ Annotations like `list[...]`, `set[...]`, `tuple[...]`, etc are what we call
   assert prog == Prog(foo=['foo', 'bar', 'baz'])
   ```
 
+  ```{note}
+  You can specify `Annotated[list[str], Arg(short=True, num_args=n)]` where
+  `n` would yield a sequence (`-1` or > 1). In such a case, `action` would instead
+  be inferred as `ArgAction.set`.
+  ```
+
 See [Argument](./arg.md) for more details on the difference between
 `ArgAction.append` and `num_args=-1`.
 
@@ -236,3 +242,58 @@ Supplying `foo bar` as the input value should produce `("foo", "bar")`, whereas
 `list[...]`, `tuple[...]`, `set[...]` all will coerce the parsed sequences of
 values into their corresponding type. The inner type will be mapped for each
 item in the sequence.
+
+### `typing.BinaryIO`/`typing.TextIO`
+
+[BinaryIO](typing.BinaryIO) and [TextIO](typing.TextIO) are used to produce an
+open file handle to the file path given by the CLI input for that argument.
+
+This can be thought of as equivlent to `open("foo.py")`, given some
+`cli --foo foo.py`, which is roughly equivalent to the
+[FileType](https://docs.python.org/3/library/argparse.html#argparse.FileType)
+feature from `argparse`.
+
+```python
+@dataclass
+class Args:
+    foo: typing.BinaryIO
+
+
+args = cappa.parse(Args)
+with args.foo:
+    print(args.foo.read())
+```
+
+```{note}
+The supported types do not map to concrete, instantiatable types. This is
+important, because neither of these types would otherwise be valid type
+annotations in the context of cappa's other inference rules.
+
+It's also important, because there are no concrete types which correspond
+to the underlying types returned by `open()`, which would allow the distinction
+between binary and text content.
+```
+
+#### Controlling `open(...)` options like `mode="w"`
+
+An un-`Annotated` IO type translates to `open(<cli value>)` with no additional
+arguments, with the exception that `BinaryIO` infers `mode='b'`.
+
+In order to directly customize arguments like `mode`, `buffering`, `encoding`,
+and `errors`, a [FileMode](cappa.FileMode) must be annotated on the input
+argument.
+
+```python
+import dataclasses
+import typing
+import cappa
+
+@dataclasses.dataclass
+class Args:
+    foo: typing.Annotated[typing.BinaryIO, cappa.FileMode(mode='wb', encoding='utf-8')]
+    bar: typing.Annotated[typing.BinaryIO, cappa.Arg(short=True), cappa.FileMode(mode='wb')]
+```
+
+As shown, [FileMode](cappa.FileMode) is annotated much like a [Arg](cappa.Arg),
+and can be used alongside one depending on the details of the argument in
+question.

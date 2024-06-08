@@ -1,4 +1,5 @@
 """Define the external facing argument definition types provided by a user."""
+
 from __future__ import annotations
 
 import dataclasses
@@ -18,12 +19,13 @@ from cappa.class_inspect import Field, extract_dataclass_metadata
 from cappa.completion.completers import complete_choices
 from cappa.completion.types import Completion
 from cappa.env import Env
-from cappa.subcommand import Subcommand
 from cappa.typing import (
     MISSING,
     NoneType,
     T,
     find_type_annotation,
+    get_optional_type,
+    is_of_type,
     is_subclass,
     is_union_type,
     missing,
@@ -66,6 +68,13 @@ class ArgAction(enum.Enum):
         return action is not None and not isinstance(action, ArgAction)
 
 
+@dataclasses.dataclass(order=True)
+class Group:
+    order: int = 0
+    name: str = ""
+    exclusive: bool = False
+
+
 @dataclasses.dataclass
 class Arg(typing.Generic[T]):
     """Describe a CLI argument.
@@ -93,7 +102,9 @@ class Arg(typing.Generic[T]):
             complex types that the type system's built-in parsing cannot handle.
 
         group: Optional group names for the argument. This affects how they're displayed
-            in the backended help text.
+            in the backend's help text.
+        exclusive_group: Indicates two args are mutually exclusive to one another.
+            Note this **also** implies `group` with the same value.
         hidden: Whether the argument should be hidden in help text. Defaults to False.
 
         action: Generally automatically inferred from the data type. This allows to
@@ -103,63 +114,86 @@ class Arg(typing.Generic[T]):
         choices: Generally automatically inferred from the data type. This allows to
             override the default.
         completion: Used to provide custom completions. If specified, should be a function
-            which acccepts a partial string value and returns a list of
+            which accepts a partial string value and returns a list of
             [cappa.Completion](cappa.Completion) objects.
-
         required: Defaults to automatically inferring requiredness, based on whether the
             class's value has a default. By setting this, you can force a particular value.
-
         field_name: The name of the class field to populate with this arg. In most usecases,
             this field should be left unspecified and automatically inferred.
+        deprecated: If supplied, the argument will be marked as deprecated. If given `True`,
+            a default message will be generated, otherwise a supplied string will be
+            used as the deprecation message.
     """
 
     value_name: str | MISSING = missing
-    short: bool | str | list[str] = False
-    long: bool | str | list[str] = False
+    short: bool | str | list[str] | None = False
+    long: bool | str | list[str] | None = False
     count: bool = False
     default: T | None | MISSING = missing
     help: str | None = None
     parse: Callable[[typing.Any], T] | None = None
 
-    group: str | tuple[int, str] | MISSING = missing
-    hidden: bool = False
+    group: str | tuple[int, str] | Group | None = None
 
+    hidden: bool = False
     action: ArgAction | Callable | None = None
     num_args: int | None = None
     choices: list[str] | None = None
     completion: Callable[..., list[Completion]] | None = None
-
     required: bool | None = None
-
     field_name: str | MISSING = missing
+    deprecated: bool | str = False
+
+    annotations: list[type] = dataclasses.field(default_factory=list)
 
     @classmethod
     def collect(
-        cls, field: Field, type_hint: type, fallback_help: str | None = None
-    ) -> Arg:
+        cls,
+        field: Field,
+        type_hint: type,
+        fallback_help: str | None = None,
+        default_short: bool = False,
+        default_long: bool = False,
+    ) -> list[Arg]:
         object_annotation = find_type_annotation(type_hint, cls)
         annotation = object_annotation.annotation
 
-        if object_annotation.obj is None:
-            arg = cls()
-        else:
-            arg = typing.cast(Arg, object_annotation.obj)
+        result = []
 
-        if object_annotation.doc:
-            fallback_help = object_annotation.doc
+        args = object_annotation.obj
+        if not args:
+            args = [cls()]
 
-        # Dataclass field metatdata takes precedence if it exists.
-        field_metadata = extract_dataclass_metadata(field)
-        assert not isinstance(field_metadata, Subcommand)
+        exclusive = len(args) > 1
 
-        if field_metadata:
-            arg = field_metadata
+        for arg in args:
+            if object_annotation.doc:
+                fallback_help = object_annotation.doc
 
-        field_name = infer_field_name(arg, field)
-        default = infer_default(arg, field, annotation)
+            # Dataclass field metadata takes precedence if it exists.
+            field_metadata = extract_dataclass_metadata(field, Arg)
+            if field_metadata:
+                arg = field_metadata
 
-        arg = dataclasses.replace(arg, field_name=field_name, default=default)
-        return arg.normalize(annotation, fallback_help=fallback_help)
+            field_name = infer_field_name(arg, field)
+            default = infer_default(arg, field, annotation)
+
+            arg = dataclasses.replace(
+                arg,
+                field_name=field_name,
+                default=default,
+                annotations=object_annotation.other_annotations,
+            )
+            normalized_arg = arg.normalize(
+                annotation,
+                fallback_help=fallback_help,
+                default_short=default_short,
+                default_long=default_long,
+                exclusive=exclusive,
+            )
+            result.append(normalized_arg)
+
+        return result
 
     def normalize(
         self,
@@ -167,23 +201,24 @@ class Arg(typing.Generic[T]):
         fallback_help: str | None = None,
         action: ArgAction | Callable | None = None,
         default: typing.Any = missing,
-        value_name: str | None = None,
         field_name: str | None = None,
+        default_short: bool = False,
+        default_long: bool = False,
+        exclusive: bool = False,
     ) -> Arg:
         origin = typing.get_origin(annotation) or annotation
         type_args = typing.get_args(annotation)
 
         field_name = typing.cast(str, field_name or self.field_name)
-        value_name = value_name or (
-            self.value_name if self.value_name is not missing else field_name
-        )
         default = default if default is not missing else self.default
 
-        verify_type_compatibility(self, annotation, origin, type_args)
-        short = infer_short(self, field_name)
-        long = infer_long(self, origin, field_name)
+        verify_type_compatibility(self, field_name, annotation, origin, type_args)
+        short = infer_short(self, field_name, default_short)
+        long = infer_long(self, origin, field_name, default_long)
         choices = infer_choices(self, origin, type_args)
-        action = action or infer_action(self, origin, type_args, long, default)
+        action = action or infer_action(
+            self, annotation, origin, type_args, long, default
+        )
         num_args = infer_num_args(self, origin, type_args, action, long)
         required = infer_required(self, annotation, default)
 
@@ -191,7 +226,9 @@ class Arg(typing.Generic[T]):
         help = infer_help(self, choices, fallback_help)
         completion = infer_completion(self, choices)
 
-        group = infer_group(self, short, long)
+        group = infer_group(self, short, long, exclusive)
+
+        value_name = infer_value_name(self, field_name, num_args)
 
         return dataclasses.replace(
             self,
@@ -226,7 +263,11 @@ class Arg(typing.Generic[T]):
 
 
 def verify_type_compatibility(
-    arg: Arg, annotation: type, origin: type, type_args: tuple[type, ...]
+    arg: Arg,
+    field_name: str,
+    annotation: type,
+    origin: type,
+    type_args: tuple[type, ...],
 ):
     """Verify classes of annotations are compatible with one another.
 
@@ -248,7 +289,7 @@ def verify_type_compatibility(
         }
         if len(all_same_arity) > 1:
             raise ValueError(
-                f"On field '{arg.field_name}', apparent mismatch of annotated type with `Arg` options. "
+                f"On field '{field_name}', apparent mismatch of annotated type with `Arg` options. "
                 'Unioning "sequence" types with non-sequence types is not currently supported, '
                 "unless using `Arg(parse=...)` or `Arg(action=<callable>)`. "
                 "See [documentation](https://cappa.readthedocs.io/en/latest/annotation.html) for more details."
@@ -256,17 +297,19 @@ def verify_type_compatibility(
         return
 
     num_args = arg.num_args
+    # print(is_sequence_type(origin), num_args, action)
+    # print(f"  {num_args not in {0, 1} or action is ArgAction.append}")
     if is_sequence_type(origin):
-        if num_args == 1 or action not in {ArgAction.append, None}:
+        if num_args in {0, 1} and action not in {ArgAction.append, None}:
             raise ValueError(
-                f"On field '{arg.field_name}', apparent mismatch of annotated type with `Arg` options. "
+                f"On field '{field_name}', apparent mismatch of annotated type with `Arg` options. "
                 f"'{annotation}' type produces a sequence, whereas `num_args=1`/`action={action}` do not. "
                 "See [documentation](https://cappa.readthedocs.io/en/latest/annotation.html) for more details."
             )
     else:
-        if num_args not in {None, 1} or action is ArgAction.append:
+        if num_args not in {None, 0, 1} or action is ArgAction.append:
             raise ValueError(
-                f"On field '{arg.field_name}', apparent mismatch of annotated type with `Arg` options. "
+                f"On field '{field_name}', apparent mismatch of annotated type with `Arg` options. "
                 f"'{origin.__name__}' type produces a scalar, whereas `num_args={num_args}`/`action={action}` do not. "
                 "See [documentation](https://cappa.readthedocs.io/en/latest/annotation.html) for more details."
             )
@@ -282,13 +325,14 @@ def infer_field_name(arg: Arg, field: Field) -> str:
 def infer_default(arg: Arg, field: Field, annotation: type) -> typing.Any:
     if arg.default is not missing:
         # Annotated[str, Env('FOO')] = "bar" should produce "bar". I.e. the field default
-        # should be used if the `Env` default is not set.
+        # should be used if the `Env` default is not set, but still attempt to read the
+        # `Env` if it **is** set.
         if (
             isinstance(arg.default, Env)
             and arg.default.default is None
             and field.default is not missing
         ):
-            return field.default
+            return Env(*arg.default.env_vars, default=field.default)
 
         return arg.default
 
@@ -300,6 +344,9 @@ def infer_default(arg: Arg, field: Field, annotation: type) -> typing.Any:
 
     if is_optional_type(annotation):
         return None
+
+    if is_subclass(annotation, bool):
+        return False
 
     return missing
 
@@ -323,24 +370,29 @@ def infer_required(arg: Arg, annotation: type, default: typing.Any | MISSING):
     return False
 
 
-def infer_short(arg: Arg, name: str) -> list[str] | typing.Literal[False]:
-    if not arg.short:
+def infer_short(
+    arg: Arg, name: str, default: bool = False
+) -> list[str] | typing.Literal[False]:
+    short = arg.short or default
+    if not short:
         return False
 
-    if isinstance(arg.short, bool):
+    if isinstance(short, bool):
         short_name = name[0]
         return [f"-{short_name}"]
 
-    if isinstance(arg.short, str):
-        short = arg.short.split("/")
+    if isinstance(short, str):
+        short = short.split("/")
     else:
-        short = arg.short
+        short = short
 
-    return [item if item.startswith("-") else f"-{item[0]}" for item in short]
+    return [item if item.startswith("-") else f"-{item}" for item in short]
 
 
-def infer_long(arg: Arg, origin: type, name: str) -> list[str] | typing.Literal[False]:
-    long = arg.long
+def infer_long(
+    arg: Arg, origin: type, name: str, default: bool
+) -> list[str] | typing.Literal[False]:
+    long = arg.long or default
 
     if not long:
         # bools get automatically coerced into flags, otherwise stay off.
@@ -374,13 +426,22 @@ def infer_choices(
 
 
 def infer_action(
-    arg: Arg, origin: type, type_args: tuple[type, ...], long, default: typing.Any
+    arg: Arg,
+    annotation: typing.Any,
+    origin: typing.Any,
+    type_args: tuple[type, ...],
+    long,
+    default: typing.Any,
 ) -> ArgAction | Callable:
     if arg.count:
         return ArgAction.count
 
     if arg.action is not None:
         return arg.action
+
+    if is_optional_type(annotation):
+        annotation = get_optional_type(annotation)
+        origin = typing.get_origin(annotation) or annotation
 
     # Coerce raw `bool` into flags by default
     if is_subclass(origin, bool):
@@ -393,13 +454,18 @@ def infer_action(
     has_specific_num_args = arg.num_args is not None
     unbounded_num_args = arg.num_args == -1
 
-    if arg.parse or unbounded_num_args or (is_positional and not has_specific_num_args):
+    if (
+        arg.parse
+        or unbounded_num_args
+        or (is_positional and not has_specific_num_args)
+        or (has_specific_num_args and arg.num_args != 1)
+    ):
         return ArgAction.set
 
-    if is_subclass(origin, (list, set)):
+    if is_of_type(annotation, (typing.List, typing.Set)):
         return ArgAction.append
 
-    if is_subclass(origin, tuple):
+    if is_of_type(annotation, typing.Tuple):
         is_unbounded_tuple = len(type_args) == 2 and type_args[1] == ...
         if is_unbounded_tuple:
             return ArgAction.append
@@ -413,7 +479,7 @@ def infer_num_args(
     type_args: tuple[type, ...],
     action: ArgAction | Callable,
     long,
-) -> int | None:
+) -> int:
     if arg.num_args is not None:
         return arg.num_args
 
@@ -477,7 +543,7 @@ def infer_parse(arg: Arg, annotation: type) -> Callable:
             return parse_optional(arg.parse)
         return arg.parse
 
-    return parse_value(annotation)
+    return parse_value(annotation, extra_annotations=arg.annotations)
 
 
 def infer_help(
@@ -511,21 +577,43 @@ def infer_completion(
 
 
 def infer_group(
-    arg: Arg, short: list[str] | bool, long: list[str] | bool
-) -> str | tuple[int, str]:
-    group = arg.group
-    group_name = None
-    if isinstance(group, str):
-        group_name = group
-        group = missing
+    arg: Arg, short: list[str] | bool, long: list[str] | bool, exclusive: bool = False
+) -> Group:
+    order = 0
+    name = None
 
-    if group is missing:
+    if isinstance(arg.group, Group):
+        name = arg.group.name
+        order = arg.group.order
+        exclusive = arg.group.exclusive
+
+    if isinstance(arg.group, str):
+        name = arg.group
+
+    if isinstance(arg.group, tuple):
+        order, name = arg.group
+
+    if name is None:
         if short or long:
-            return (0, group_name or "Options")
+            name = "Options"
+        else:
+            name = "Arguments"
+            order = 1
 
-        return (1, group_name or "Arguments")
+    return Group(name=name, order=order, exclusive=exclusive)
 
-    return typing.cast(typing.Tuple[int, str], group)
+
+def infer_value_name(arg: Arg, field_name: str, num_args: int | None) -> str:
+    if arg.value_name is not missing:
+        return arg.value_name
+
+    if num_args == -1:
+        return f"{field_name} ..."
+
+    if num_args and num_args > 1:
+        return " ".join([field_name] * num_args)
+
+    return field_name
 
 
 no_extra_arg_actions = {

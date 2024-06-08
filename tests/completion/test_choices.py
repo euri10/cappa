@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Union
+from typing import Union
 
 import cappa
-from typing_extensions import Annotated
+from typing_extensions import Annotated, Literal
 
 from tests.utils import parse_completion
 
