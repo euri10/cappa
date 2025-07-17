@@ -1,8 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import ClassVar
 
-import cappa
 import pytest
 
+import cappa
 from tests.utils import backends
 
 
@@ -13,8 +14,7 @@ def test_color_off(backend):
 
     @cappa.command(invoke=no_op)
     @dataclass
-    class Example:
-        ...
+    class Example: ...
 
     cappa.invoke(Example, color=False, argv=[], backend=backend)
 
@@ -22,8 +22,7 @@ def test_color_off(backend):
 @backends
 def test_no_help(backend):
     @dataclass
-    class Example:
-        ...
+    class Example: ...
 
     result = cappa.parse(Example, argv=[], help=False, backend=backend)
     assert result == Example()
@@ -41,8 +40,7 @@ def test_no_help(backend):
 @backends
 def test_arg_help(capsys, backend):
     @dataclass
-    class Example:
-        ...
+    class Example: ...
 
     help: cappa.Arg = cappa.Arg(short="-p", long="--pelp")
 
@@ -67,8 +65,7 @@ def test_arg_help(capsys, backend):
 @backends
 def test_version_enabled(capsys, backend):
     @dataclass
-    class Example:
-        ...
+    class Example: ...
 
     with pytest.raises(SystemExit) as e:
         cappa.parse(Example, argv=["--version"], version="1.2.3", backend=backend)
@@ -81,8 +78,7 @@ def test_version_enabled(capsys, backend):
 @backends
 def test_arg_version(capsys, backend):
     @dataclass
-    class Example:
-        ...
+    class Example: ...
 
     version: cappa.Arg = cappa.Arg("1.2.3", short="-p", long="--persion")
 
@@ -107,8 +103,7 @@ def test_arg_version(capsys, backend):
 @backends
 def test_version_without_help(backend):
     @dataclass
-    class Example:
-        ...
+    class Example: ...
 
     result = cappa.parse(Example, argv=[], version="1.2.3", help=False, backend=backend)
     assert result == Example()
@@ -117,8 +112,7 @@ def test_version_without_help(backend):
 @backends
 def test_arg_explicit_version_missing_name(backend):
     @dataclass
-    class Example:
-        ...
+    class Example: ...
 
     version: cappa.Arg = cappa.Arg(short="-p", long="--persion")
 
@@ -134,8 +128,7 @@ def test_arg_explicit_version_missing_name(backend):
 @backends
 def test_arg_explicit_version_long_true_defaults_to_version(capsys, backend):
     @dataclass
-    class Example:
-        ...
+    class Example: ...
 
     version: cappa.Arg = cappa.Arg("1.2.3", short="-p", long=True)
 
@@ -149,8 +142,7 @@ def test_arg_explicit_version_long_true_defaults_to_version(capsys, backend):
 @backends
 def test_prog_basename(capsys, backend):
     @dataclass
-    class Example:
-        ...
+    class Example: ...
 
     with pytest.raises(cappa.Exit):
         cappa.parse(Example, argv=["--help"], backend=backend)
@@ -162,8 +154,21 @@ def test_prog_basename(capsys, backend):
 @backends
 def test_collect_composes_with_parse(backend):
     @dataclass
+    class Example: ...
+
+    command = cappa.collect(Example, backend=backend)
+    result = cappa.parse(command, argv=[], backend=backend)
+
+    assert result == Example()
+
+
+@backends
+def test_collect_skips_non_init_fields(backend):
+    @dataclass
     class Example:
-        ...
+        skipped1: ClassVar[str] = "skipped1"
+        skipped2: str = field(default="", init=False)
+        present: str = ""
 
     command = cappa.collect(Example, backend=backend)
     result = cappa.parse(command, argv=[], backend=backend)

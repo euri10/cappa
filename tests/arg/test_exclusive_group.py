@@ -3,11 +3,11 @@ from __future__ import annotations
 import textwrap
 from dataclasses import dataclass
 
-import cappa
 import pytest
-from cappa.arg import Group
 from typing_extensions import Annotated
 
+import cappa
+from cappa.arg import Group
 from tests.utils import backends, parse, strip_trailing_whitespace
 
 
@@ -59,8 +59,8 @@ def test_implicit_syntax_explicit_name(backend, capsys):
         textwrap.dedent(
             """
             Foo
-              [-v]
-              [--verbosity VERBOSE]
+              [-v]                       (Default: 0)
+              [--verbosity VERBOSE]      (Default: 0)
             """,
         ),
         "  ",
@@ -119,6 +119,6 @@ def test_differing_group_identity(backend):
         parse(ArgTest, backend=backend)
 
     assert str(e.value) == (
-        "Group details between `Group(order=0, name='Verbose', exclusive=False)` "
-        "and `Group(order=0, name='Verbose', exclusive=True)` must match"
+        "Group details between `Group(order=0, name='Verbose', exclusive=False, section=0)` "
+        "and `Group(order=0, name='Verbose', exclusive=True, section=0)` must match"
     )

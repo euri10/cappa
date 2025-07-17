@@ -4,14 +4,15 @@ import importlib
 import importlib.util
 import io
 import logging
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Sequence, cast
 
 from rich.console import Console
 
 import cappa
-from cappa.help import format_help, generate_arg_groups
+from cappa.default import Default
+from cappa.help import HelpFormatter, generate_arg_groups
 from cappa.output import Displayable, theme
-from cappa.typing import missing
+from cappa.type_view import Empty
 
 try:
     importlib.util.find_spec("docutils")
@@ -30,19 +31,20 @@ FONT_FAMILY = (
 )
 
 
-def setup(app) -> None:  # pragma: no cover
+def setup(app) -> dict:  # pragma: no cover
     app.add_directive("cappa", CappaDirective)
+    return {"parallel_read_safe": True}
 
 
 class CappaDirective(Directive):
     has_content = False
     required_arguments = 1
-    option_spec: ClassVar[dict[str, Any]] = {
+    option_spec: ClassVar[dict[str, Any] | None] = {
         "style": directives.unchanged,
         "terminal-width": directives.unchanged,
     }
 
-    def run(self) -> list[nodes.Node]:
+    def run(self) -> Sequence[nodes.Node]:
         path = self.arguments[0]
         style = self.options.get("style", "terminal")
         terminal_width = int(self.options.get("terminal-width", "0"))
@@ -63,7 +65,7 @@ class CappaDirective(Directive):
 
 
 def render_to_terminal(command: cappa.Command, terminal_width: int):
-    raw_help: list[Displayable] = format_help(command, command.real_name())
+    raw_help: list[Displayable] = HelpFormatter.default(command, command.real_name())
 
     line_wrap = ""
     if terminal_width == 0:
@@ -103,10 +105,10 @@ def render_to_docutils(command: cappa.Command, document):
 
     section += nodes.paragraph(text="\n\n".join(description))
 
-    for group, args in generate_arg_groups(command):
+    for (group_name, _), args in generate_arg_groups(command):
         command_options = [arg for arg in args if isinstance(arg, cappa.Arg)]
         if command_options:
-            section += nodes.subtitle(text=group.name)
+            section += nodes.subtitle(text=group_name)
 
             option = nodes.bullet_list()
             section += option
@@ -120,11 +122,14 @@ def render_to_docutils(command: cappa.Command, document):
                     for name in names:
                         option_content += nodes.literal(text=name)
                 else:
-                    name = arg.field_name
-                    name += f" {arg.value_name.upper()}"
+                    name = cast(str, arg.field_name)
+                    value_name = cast(str, arg.value_name)
+
+                    name += f" {value_name.upper()}"
                     option_content += nodes.literal(text=name)
 
-                if arg.default is not missing and arg.default is not None:
+                assert isinstance(arg.default, Default)
+                if arg.default.default not in (Empty, None):
                     default = str(arg.default)
 
                     option_content += nodes.inline(text=" (")

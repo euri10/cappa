@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import cappa
 from typing_extensions import Annotated
 
+import cappa
 from tests.utils import parse_completion
 
 
@@ -26,7 +26,7 @@ def test_long_option_name_with_help():
     assert result == "--default:Enables default"
 
 
-def test_mulitple_matches():
+def test_multiple_matches():
     @dataclass
     class Args:
         apple: Annotated[str, cappa.Arg(short=True, help="apple")]

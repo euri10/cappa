@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import cappa
 from typing_extensions import Annotated
 
+import cappa
 from tests.utils import backends, parse
 
 
@@ -18,3 +18,16 @@ class Command:
 def test_valid(backend):
     test = parse(Command, "1", "2", backend=backend)
     assert test == Command(1, 2)
+
+
+@backends
+def test_default_is_not_mapped(backend):
+    @dataclass
+    class Command:
+        foo: int = "4"  # type: ignore
+
+    test = parse(Command, "1", backend=backend)
+    assert test == Command(1)
+
+    test = parse(Command, backend=backend)
+    assert test == Command("4")  # type: ignore

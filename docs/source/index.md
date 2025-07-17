@@ -32,17 +32,19 @@ Completions <completion>
 Output, Exiting, and Exit Codes <exiting>
 Parser Backends (Cappa/Argparse) <backends>
 Testing <testing>
+Function/Method Based Commands <functions_and_methods>
 ```
 
 ```{toctree}
 :caption: Extra Details
 :hidden:
 
-Examples (vs click/typer/argparse) <examples>
-Help Text Inference <help>
+Examples (vs click/typer/argparse) <examples/index>
+Help/Help Inference <help>
 Asyncio <asyncio>
 Manual Construction <manual_construction>
 Sphinx/Docutils Directive <sphinx>
+Shared State <state>
 ```
 
 ```{toctree}

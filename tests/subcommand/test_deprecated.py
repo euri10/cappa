@@ -3,9 +3,9 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 
-import cappa
 import pytest
 
+import cappa
 from tests.utils import parse
 
 
@@ -58,5 +58,5 @@ def test_argparse_ge_313(capsys):
 
     result = parse(ArgTest, "sub", backend=cappa.argparse.backend)
     assert result.sub == Sub()
-    err = capsys.readouterr().err
+    err = capsys.readouterr().err.replace("arg-test: ", "").strip()
     assert err == "warning: command 'sub' is deprecated"

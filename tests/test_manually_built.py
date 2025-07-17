@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import List
+
+import pytest
 
 import cappa
-import pytest
-from cappa.annotation import parse_list, parse_value
 from cappa.output import Exit
-
+from cappa.parse import parse_list, parse_value
 from tests.utils import backends, parse
 
 
@@ -19,8 +20,8 @@ class Foo:
 command = cappa.Command(
     Foo,
     arguments=[
-        cappa.Arg(field_name="bar", parse=str),
-        cappa.Arg(field_name="baz", parse=parse_list(int), num_args=-1),
+        cappa.Arg(field_name="bar"),
+        cappa.Arg(field_name="baz", parse=parse_list(List[int]), num_args=-1),
     ],
     help="Short help.",
     description="Long description.",
@@ -44,18 +45,20 @@ def test_help(capsys, backend):
     assert "Long description." in out
 
 
+@dataclass
+class Bar:
+    bar: str
+
+
+@dataclass
+class Foo2:
+    sub: Bar
+
+
 @backends
 def test_subcommand(backend):
-    @dataclass
-    class Bar:
-        bar: str
-
-    @dataclass
-    class Foo:
-        sub: Bar
-
     command = cappa.Command(
-        Foo,
+        Foo2,
         arguments=[
             cappa.Subcommand(
                 field_name="sub",
@@ -63,7 +66,7 @@ def test_subcommand(backend):
                     "bar": cappa.Command(
                         Bar,
                         arguments=[
-                            cappa.Arg(field_name="bar", parse=parse_value),
+                            cappa.Arg(field_name="bar", parse=parse_value(str)),
                         ],
                     )
                 },
@@ -74,4 +77,4 @@ def test_subcommand(backend):
     )
 
     result = parse(command, "bar", "one", backend=backend)
-    assert result == Foo(sub=Bar("one"))
+    assert result == Foo2(sub=Bar("one"))

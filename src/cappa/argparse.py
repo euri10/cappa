@@ -5,15 +5,13 @@ import sys
 import typing
 from collections.abc import Callable
 
-from typing_extensions import assert_never
-
-from cappa.arg import Arg, ArgAction, no_extra_arg_actions
+from cappa.arg import Arg, ArgAction
 from cappa.command import Command, Subcommand
-from cappa.help import format_help, generate_arg_groups
-from cappa.invoke import fullfill_deps
+from cappa.help import generate_arg_groups
+from cappa.invoke import fulfill_deps
 from cappa.output import Exit, HelpExit, Output
 from cappa.parser import RawOption, Value
-from cappa.typing import assert_type, missing
+from cappa.typing import assert_never, assert_type
 
 if sys.version_info < (3, 9):  # pragma: no cover
     # Backport https://github.com/python/cpython/pull/3680
@@ -89,24 +87,8 @@ class ArgumentParser(argparse.ArgumentParser):
 
         raise Exit(message, code=status, prog=self.prog)
 
-    def print_help(self):
-        raise HelpExit(format_help(self.command, self.prog))
-
-
-class BooleanOptionalAction(argparse.Action):
-    """Simplified backport of same-named class from 3.9 onward.
-
-    We know more about the called context here, and thus need much less of the
-    logic. Also, we support 3.8, which does not have the original class, so we
-    couldn't use it anyway.
-    """
-
-    def __init__(self, **kwargs):
-        super().__init__(nargs=0, **kwargs)
-
-    def __call__(self, parser, namespace, values, option_string=None):
-        assert isinstance(option_string, str)
-        setattr(namespace, self.dest, not option_string.startswith("--no-"))
+    def print_help(self, file=None):
+        raise HelpExit(self.command.help_formatter(self.command, self.prog))
 
 
 def custom_action(arg: Arg, action: Callable):
@@ -120,17 +102,17 @@ def custom_action(arg: Arg, action: Callable):
         ):
             # XXX: This should ideally be able to inject parser state, but here, we dont
             #      have access to the same state as the native parser.
-            fullfilled_deps: dict = {
+            fulfilled_deps: dict = {
                 Output: parser.output,
                 Value: Value(values),
                 Command: namespace.__command__,
                 Arg: arg,
             }
             if option_string:
-                fullfilled_deps[RawOption] = RawOption.from_str(option_string)
+                fulfilled_deps[RawOption] = RawOption.from_str(option_string)
 
-            deps = fullfill_deps(action, fullfilled_deps)
-            result = action(**deps)
+            deps = fulfill_deps(action, fulfilled_deps)
+            result = action(**deps.kwargs)
             setattr(namespace, self.dest, result)
 
     return CustomAction
@@ -211,9 +193,9 @@ def add_arguments(
     parser: argparse.ArgumentParser, command: Command, output: Output, dest_prefix=""
 ):
     arg_groups = generate_arg_groups(command, include_hidden=True)
-    for group, args in arg_groups:
-        argparse_group = parser.add_argument_group(title=group.name)
-        if group.exclusive:
+    for (group_name, group_exclusive), args in arg_groups:
+        argparse_group = parser.add_argument_group(title=group_name)
+        if group_exclusive:
             argparse_group = argparse_group.add_mutually_exclusive_group()
 
         for arg in args:
@@ -221,7 +203,7 @@ def add_arguments(
                 add_argument(argparse_group, arg, dest_prefix=dest_prefix)
             elif isinstance(arg, Subcommand):
                 add_subcommands(
-                    parser, group.name, arg, output=output, dest_prefix=dest_prefix
+                    parser, group_name, arg, output=output, dest_prefix=dest_prefix
                 )
             else:
                 assert_never(arg)
@@ -233,6 +215,9 @@ def add_argument(
     dest_prefix="",
     **extra_kwargs,
 ):
+    if arg.propagate:
+        raise ValueError("The argparse backend does not support the `Arg.propagate`.")
+
     names: list[str] = []
     if arg.short:
         short = assert_type(arg.short, list)
@@ -244,28 +229,23 @@ def add_argument(
 
     is_positional = not names
 
-    num_args = backend_num_args(arg.num_args)
+    num_args = backend_num_args(arg.num_args, assert_type(arg.required, bool))
 
     kwargs: dict[str, typing.Any] = {
-        "dest": dest_prefix + arg.field_name,
+        "dest": dest_prefix + assert_type(arg.field_name, str),
         "help": arg.help,
         "metavar": arg.value_name,
         "action": get_action(arg),
+        "default": argparse.SUPPRESS,
     }
 
-    if not is_positional and arg.required:
+    if not is_positional and arg.required and assert_type(arg.num_args, int) >= 0:
         kwargs["required"] = arg.required
 
-    if arg.default is not missing:
-        kwargs["default"] = argparse.SUPPRESS
-
-    if num_args is not None and (arg.action and arg.action not in no_extra_arg_actions):
+    if num_args is not None and not ArgAction.is_non_value_consuming(arg.action):
         kwargs["nargs"] = num_args
     elif is_positional and not arg.required:
         kwargs["nargs"] = "?"
-
-    if arg.choices:
-        kwargs["choices"] = arg.choices
 
     deprecated_kwarg = add_deprecated_kwarg(arg)
     kwargs.update(deprecated_kwarg)
@@ -315,12 +295,14 @@ def add_subcommands(
         )
 
 
-def backend_num_args(num_args: int | None) -> int | str | None:
+def backend_num_args(num_args: int | None, required: bool) -> int | str | None:
     if num_args is None or num_args == 1:
         return None
 
     if num_args == -1:
-        return "+"
+        if required:
+            return "+"
+        return "*"
 
     return num_args
 
@@ -342,11 +324,6 @@ def join_help(*segments):
 def get_action(arg: Arg) -> argparse.Action | type[argparse.Action] | str:
     action = arg.action
     if isinstance(action, ArgAction):
-        if action in {ArgAction.store_true, ArgAction.store_false}:
-            long = assert_type(arg.long, list)
-            has_no_option = any("--no-" in i for i in long)
-            if has_no_option:
-                return BooleanOptionalAction
         return action.value
 
     action = typing.cast(Callable, action)

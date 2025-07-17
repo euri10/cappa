@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from unittest.mock import patch
 
-import cappa
 import pytest
 from typing_extensions import Annotated
 
+import cappa
 from tests.utils import backends, parse
 
 
@@ -142,3 +143,54 @@ def test_optional_bool_and_int(backend):
 
     test = parse(ArgTest, "-t", "asdf", backend=backend)
     assert test.true_false is True
+
+
+@backends
+def test_env_default_value_precedence(backend):
+    """Assert a bool flag yields correct value given an env default."""
+
+    @dataclass
+    class ArgTest:
+        env_default: Annotated[
+            bool, cappa.Arg(long=True, default=cappa.Env("ENV_DEFAULT"))
+        ] = False
+
+    test = parse(ArgTest, backend=backend)
+    assert test.env_default is False
+
+    with patch("os.environ", new={"ENV_DEFAULT": "1"}):
+        test = parse(ArgTest, backend=backend)
+    assert test.env_default is True
+
+    test = parse(ArgTest, "--env-default", backend=backend)
+    assert test.env_default is True
+
+    with patch("os.environ", new={"ENV_DEFAULT": "1"}):
+        test = parse(ArgTest, "--env-default", backend=backend)
+    assert test.env_default is True
+
+
+@backends
+def test_sole_no_arg(backend):
+    @dataclass
+    class ArgTest:
+        no_dry_run: bool = False
+
+    test = parse(ArgTest, backend=backend)
+    assert test.no_dry_run is False
+
+    test = parse(ArgTest, "--no-dry-run", backend=backend)
+    assert test.no_dry_run is True
+
+
+@backends
+def test_sole_no_arg_inverted(backend):
+    @dataclass
+    class ArgTest:
+        no_dry_run: bool = True
+
+    test = parse(ArgTest, backend=backend)
+    assert test.no_dry_run is True
+
+    test = parse(ArgTest, "--no-dry-run", backend=backend)
+    assert test.no_dry_run is False

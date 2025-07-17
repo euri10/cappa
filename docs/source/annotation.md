@@ -178,13 +178,13 @@ each subcommand has a unambiguous name.
 
 Mapping inference is a sort of subset of `Arg`-settings inference, in that it
 effectively uses the annotated type to set `Arg(parse=...)` in a way that maps
-the raw values coming out of a sucessful CLI parse into the annotated types.
+the raw values coming out of a successful CLI parse into the annotated types.
 
 As such you can again, opt out of the "Mapping inference" entirely, by supplying
 your own `parse` function.
 
 ```{note}
-Mapping inference is built up out of component functions defined in `cappa.annotation`,
+Mapping inference is built up out of component functions defined in `cappa.parse`,
 such as `parse_list`, which know how to translate `list[int]` and a source list of raw
 parser strings into a list of ints.
 
@@ -201,6 +201,19 @@ returns the type (such as `pathlib.Path`, or `decimal.Decimal`).
 
 Note this also applies to `Enum`s, who's raw values by map-time should be
 guaranteed to be compatible with the Enum's variants.
+
+### `date`/`datetime`/`time`
+
+Both types are directly supported through inference, by calling the `fromisoformat`
+method on each type.
+
+```{note}
+The set of supported input formats are
+[python version specific](https://docs.python.org/3/library/datetime.html#datetime.date.fromisoformat).
+```
+
+To support more general input formats, you should instead supply a function to
+`Arg(parse=...)` which accepts a string and returns the given type.
 
 ### Union (and Optional)
 
@@ -248,7 +261,7 @@ item in the sequence.
 [BinaryIO](typing.BinaryIO) and [TextIO](typing.TextIO) are used to produce an
 open file handle to the file path given by the CLI input for that argument.
 
-This can be thought of as equivlent to `open("foo.py")`, given some
+This can be thought of as equivalent to `open("foo.py")`, given some
 `cli --foo foo.py`, which is roughly equivalent to the
 [FileType](https://docs.python.org/3/library/argparse.html#argparse.FileType)
 feature from `argparse`.

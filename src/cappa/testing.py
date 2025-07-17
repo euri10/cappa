@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from typing_extensions import Unpack
 
 import cappa
+from cappa.help import HelpFormattable
+from cappa.invoke import DepTypes
+from cappa.state import State
 
 __all__ = [
     "CommandRunner",
@@ -17,15 +20,16 @@ class RunnerArgs(typing.TypedDict, total=False):
     """Available kwargs for `parse` and `invoke` function, to match `CommandRunner` fields."""
 
     obj: type
-    deps: typing.Sequence[typing.Callable] | typing.Mapping[
-        typing.Callable, cappa.Dep | typing.Any
-    ] | None
+    deps: DepTypes
     backend: typing.Callable | None
     output: cappa.Output | None
     color: bool
     version: str | cappa.Arg
     help: bool | cappa.Arg
     completion: bool | cappa.Arg
+    help_formatter: HelpFormattable
+    input: typing.TextIO | None
+    state: State | None
 
 
 @dataclass
@@ -50,37 +54,38 @@ class CommandRunner:
         >>> @dataclass
         ... class Obj:
         ...     first: str
-        ...     second: str = '2'
+        ...     second: str = "2"
 
         Create an instance with no arguments means there is no default state
 
         >>> runner = CommandRunner()
-        >>> runner.parse('one', obj=Obj)
+        >>> runner.parse("one", obj=Obj)
         Obj(first='one', second='2')
 
         Or create a runner that always uses the same base CLI object, and default base command
 
-        >>> runner = CommandRunner(Obj, base_args=['first'])
+        >>> runner = CommandRunner(Obj, base_args=["first"])
 
         Now each test, can customize the behavior to suit the test in question.
 
         >>> runner.parse(color=False)
         Obj(first='first', second='2')
 
-        >>> runner.parse('two')
+        >>> runner.parse("two")
         Obj(first='first', second='two')
     """
 
     obj: type | None = None
-    deps: typing.Sequence[typing.Callable] | typing.Mapping[
-        typing.Callable, cappa.Dep | typing.Any
-    ] | None = None
+    deps: DepTypes = None
     backend: typing.Callable | None = None
     output: cappa.Output | None = None
     color: bool = True
     version: str | cappa.Arg | None = None
     help: bool | cappa.Arg = True
     completion: bool | cappa.Arg = True
+    help_formatter: HelpFormattable | None = None
+    input: typing.TextIO | None = None
+    state: State | None = None
 
     base_args: list[str] = field(default_factory=lambda: [])
 
@@ -96,6 +101,11 @@ class CommandRunner:
             "completion": kwargs["completion"]
             if "completion" in kwargs
             else self.completion,
+            "help_formatter": kwargs["help_formatter"]
+            if "help_formatter" in kwargs
+            else self.help_formatter,
+            "input": kwargs.get("input") or self.input,
+            "state": kwargs.get("state") or self.state,
         }
 
     def parse(self, *args: str, **kwargs: Unpack[RunnerArgs]):

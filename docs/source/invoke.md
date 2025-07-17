@@ -27,7 +27,7 @@ invoked for your command.
    itself. However being forced to define function at the same location as your
    CLI definition may or may not be a drawback at all, for your usecase.
 
-2. You can utilize the explcit `invoke=function` argument:
+2. You can utilize the expliicit `invoke=function` argument:
 
    ```python
    def function(example: Example):
@@ -100,8 +100,7 @@ Then, in order to opt into the invoke behavior, you need to call
 [cappa.invoke](cappa.invoke), rather than [cappa.parse](cappa.parse).
 
 ```{eval-rst}
-.. autoapimodule:: cappa
-   :members: invoke
+.. autoapifunction:: cappa.invoke
    :noindex:
 ```
 
@@ -137,7 +136,7 @@ which is mostly just a net reduction in boilerplate.
 `cappa.invoke` wouldn't be of much value if all it did was call argument-less
 functions without any context. Thus, there is a system of "dependencies" that
 cause arguments to your invoke functions to be supplied on demand, assuming the
-CLI invocation is capable of fullfilling the dependencies.
+CLI invocation is capable of fulfilling the dependencies.
 
 There are two kinds of invoke dependencies, implicit and explicit.
 
@@ -152,13 +151,17 @@ These objects include:
   command/subcommand. For example:
 
   ```python
-  @dataclass
+  def foo(command: Example, subcmd: SubExample):
+      ...
+
+  @dataclass(invoke=foo)
   class SubExample:
       ...
 
   @dataclass
   class Example:
       subcommand: Annotated[SubExample, cappa.Subcommand]
+
   ```
 
   `Example` and `SubExample` will be available as implicit dependencies.
@@ -166,28 +169,34 @@ These objects include:
 - A [cappa.Command](cappa.Command), which provides the `Command` object
   corresponding to the command/subcommand that was parsed.
 
+- A [cappa.Self](cappa.Self), which can be used to produce the **current**
+  command/subcommand.
+
+  `Self` is primarily useful as a way to reuse generic invoke functions among
+  a number of separate subcommands. For example,
+
+  ```python
+  def invoke(self: Self):
+      print(self)
+
+  @command(invoke=invoke)
+  class Foo: ...
+
+  @command(invoke=invoke)
+  class Bar: ...
+  ```
+
 - A [cappa.Output](cappa.Output), which can be used to produce (themed)
   stdout/stderr output.
 
 ```{note}
-If there were another subcommand option, and the CLI invocation selected one or
-the other of the two subcommand options, only the selected subcommand would have
-been fullfilled.
+In CLIs with nested subcommand hierarchies, only the subcommand path to the
+user-selected subcommand will be materialized. That is to say, a subcommand
+which has not been selected will not be available as an invoke dependency.
 
-It's therefore programmer error to describe an `invoke` function heirarchy which
-depends on command options that would not have been constructed during parsing.
-```
-
-Given the implicit dependencies available to you, your `invoke` functions can
-accept an argument of that type, and it will be automatically provided to the
-function when invoked.
-
-```python
-def foo(command: Command, subcmd: Subcommand):
-    ...
-
-@cappa.command(invoke=foo)
-...
+It's therefore programmer error to describe an `invoke` function which
+depends on command options that would not have been constructed during parsing,
+based on where it is in the hierarchy.
 ```
 
 ### Explicit Dependencies
@@ -203,7 +212,7 @@ annotated with a `Dep` in order to be recognized as such.
 ```{note}
 A function describing an explicit dependency can, itself, depend on other
 explicit or implicit dependencies. This allows recursively building up a dependency
-heirarchy.
+hierarchy.
 ```
 
 ```python
@@ -305,9 +314,20 @@ def main():
     cappa.invoke(Command, deps=[dep])
 ```
 
-Note, given as a Sequence (i.e. list, tuple), you can just provide the source
+```{note}
+When given as a Sequence (i.e. list, tuple), you can just provide the source
 function which should act as a `Dep`, and it will be automatically coerced into
 a proper `Dep`.
+```
+
+```{note}
+Individual items (like the `dep` function above) can also be given as fully qualified
+string references to the dep, similar to how [invoke](./invoke.md) functions may
+be provided.
+
+This enables one to fully decouple of the runtime import paths required while
+defining the CLI from the code required to execute the CLI itself.
+```
 
 ### Overriding Dependencies
 
@@ -316,8 +336,8 @@ See [Testing](./testing.md) for additional details. This option is primarily
 motivated to aid stubbing dependencies for testing.
 ```
 
-An alternative to the above sequence input for `deps`, you can instead supply a
-Mapping, where the key is the "source" dependency function (i.e. the function a
+As an alternative to the above sequence input for `deps`, you can instead supply a
+`Mapping`, where the key is the "source" dependency function (i.e. the function a
 dependent invoke function would reference) and the value is the actual
 dependency which should be used in its place.
 
@@ -329,7 +349,7 @@ def foo():
     ...
 
 # and here is a function which depends upon it.
-def invokable_function(foo: Annotated[int, Dep(foo)]):
+def invocable_function(foo: Annotated[int, Dep(foo)]):
     ...
 ```
 
@@ -353,7 +373,7 @@ cappa.invoke(Command, deps={foo: 4})
 ### Unfulfilled Dependencies
 
 Should an argument be neither an explicitly annotated `Dep`, nor typed as one of
-the available implicit dependencies in the heirarchy, then it's considered
+the available implicit dependencies in the hierarchy, then it's considered
 unfulfilled.
 
 If the argument to the callable has a default value, then the argument will
